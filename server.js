@@ -91,7 +91,10 @@ app.post("/outgoing", async (req, res) => {
     res.status(200).json({ success: true });
   } catch (error) {
     console.error("Outgoing message error:", error);
-    res.status(500).json({ message: "Failed to process outgoing message." });
+    res.status(500).json({
+      message: "Failed to process outgoing message.",
+      error: error.message || error,
+    });
   }
 });
 
