@@ -4,11 +4,12 @@ const dotenv = require("dotenv");
 const Pusher = require("pusher");
 const pool = require("./utils/db");
 const { translateToKuwaitiArabic } = require("./utils/translate");
+const { sendOutgoingMessage } = require("./utils/sendOutgoing");
 const verifyToken = require("./middleware/verifyToken");
 
 dotenv.config();
 
-const app = express();
+const app = express(); 
 app.use(cors());
 app.use(express.json());
 
@@ -53,10 +54,37 @@ app.post("/incoming", async (req, res) => {
 
 // Outgoing agent message handler (Spanish text translated to Arabic and saved)
 app.post("/outgoing", async (req, res) => {
-  const { chatId, contractId, spanishText, from } = req.body;
+  const { chatId, contractId, spanishText, from, phoneNumber } = req.body;
   try {
-    console.log("Outgoing message:", { chatId, contractId, spanishText, from });
+    if (!chatId || !contractId || !spanishText?.trim()) {
+      return res.status(400).json({
+        message: "chatId, contractId, and spanishText are required.",
+      });
+    }
+
+    console.log("Outgoing message:", {
+      chatId,
+      contractId,
+      spanishText,
+      from,
+      phoneNumber,
+    });
+
     const translatedArabic = await translateToKuwaitiArabic(spanishText);
+
+    const outboundPayload = {
+      chatId,
+      contact_id: contractId,
+      phoneNumber: phoneNumber || null,
+      sender: from || "agent",
+      originalText: spanishText,
+      translatedText: translatedArabic,
+      languageFrom: "Spanish",
+      languageTo: "Arabic",
+      timestamp: new Date().toISOString(),
+    };
+
+    const outboundResult = await sendOutgoingMessage(outboundPayload);
 
     await pool.execute(
       `INSERT INTO messages (contact_id, name, phone_number, direction, original_text, translated_text, language_from, language_to, timestamp, status)
@@ -64,13 +92,13 @@ app.post("/outgoing", async (req, res) => {
       [
         contractId,
         "Agent", // Static agent name
-        "", // No phone number needed for agent
+        phoneNumber || "",
         "Outbound", // Direction
         spanishText,
         translatedArabic,
         "Spanish",
         "Arabic",
-        "Sent",
+        outboundResult.skipped ? "Pending Delivery" : "Sent",
       ],
     );
 
@@ -88,7 +116,13 @@ app.post("/outgoing", async (req, res) => {
 
     delete messageCache[chatId];
     delete lastCacheTime[chatId];
-    res.status(200).json({ success: true });
+    res.status(200).json({
+      success: true,
+      delivery: outboundResult,
+      message: outboundResult.skipped
+        ? "Message stored and broadcast, but outbound delivery webhook is not configured."
+        : "Message stored, delivered to outbound webhook, and broadcast.",
+    });
   } catch (error) {
     console.error("Outgoing message error:", error);
     res.status(500).json({
